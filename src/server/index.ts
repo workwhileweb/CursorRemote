@@ -75,7 +75,6 @@ async function main(): Promise<void> {
   const selectors = loadSelectors(config);
 
   console.log(`[main] CDP URL: ${config.cdpUrl}`);
-  console.log(`[main] Server: http://${config.serverHost}:${config.serverPort}`);
   console.log(`[main] Poll interval: ${config.pollIntervalMs}ms`);
   console.log(`[main] Debounce: ${config.debounceMs}ms`);
   console.log(`[main] Telegram: ${config.telegram.enabled ? 'enabled' : 'disabled'}`);
@@ -121,6 +120,7 @@ async function main(): Promise<void> {
 
   const relay = new Relay(config, stateManager, commandExecutor, cdpBridge);
   await relay.start();
+  console.log(`[main] Server: http://${config.serverHost}:${config.serverPort}`);
 
   console.log('[main] Connecting to Cursor IDE...');
   await cdpBridge.connect();

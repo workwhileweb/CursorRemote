@@ -158,15 +158,46 @@ export class Relay {
     }
   }
 
+  /**
+   * Binds starting at `config.serverPort`; if that port is in use, tries +1, +2, … (max 100 attempts).
+   * Updates `config.serverPort` to the bound port so health and logs match.
+   */
   start(): Promise<void> {
-    return new Promise((resolve) => {
-      this.httpServer.listen(this.config.serverPort, this.config.serverHost, () => {
-        console.log(
-          `[relay] Server listening on http://${this.config.serverHost}:${this.config.serverPort}`
-        );
-        resolve();
+    const host = this.config.serverHost;
+    const basePort = this.config.serverPort;
+    const maxAttempts = 100;
+
+    const tryListen = (port: number): Promise<void> =>
+      new Promise((resolve, reject) => {
+        const onErr = (err: NodeJS.ErrnoException) => {
+          this.httpServer.off('error', onErr);
+          reject(err);
+        };
+        this.httpServer.once('error', onErr);
+        this.httpServer.listen(port, host, () => {
+          this.httpServer.off('error', onErr);
+          this.config.serverPort = port;
+          if (port !== basePort) {
+            console.log(`[relay] Port ${basePort} in use, using ${port} instead`);
+          }
+          console.log(`[relay] Server listening on http://${host}:${port}`);
+          resolve();
+        });
       });
-    });
+
+    return (async () => {
+      for (let i = 0; i < maxAttempts; i++) {
+        const port = basePort + i;
+        try {
+          await tryListen(port);
+          return;
+        } catch (err) {
+          const code = (err as NodeJS.ErrnoException).code;
+          if (code !== 'EADDRINUSE') throw err;
+        }
+      }
+      throw new Error(`[relay] No free port in range ${basePort}-${basePort + maxAttempts - 1}`);
+    })();
   }
 
   async stop(): Promise<void> {

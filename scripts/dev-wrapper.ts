@@ -3,8 +3,9 @@
  * then spawns tsx watch. This avoids tsx watch intercepting Enter as "restart".
  */
 import { spawn } from 'child_process';
+import { createRequire } from 'module';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { dirname, resolve } from 'path';
+import { dirname, join, resolve } from 'path';
 import { createInterface } from 'readline';
 
 const LICENSE_PATH = resolve(process.cwd(), 'data', 'license.key');
@@ -81,12 +82,21 @@ async function ensureLicense(): Promise<void> {
   }
 }
 
+const require = createRequire(import.meta.url);
+
+/** Run tsx watch via `node …/tsx/dist/cli.mjs` — works on Windows (`.bin/tsx` is not a real exe). */
+function resolveTsxCli(): string {
+  const pkgRoot = dirname(require.resolve('tsx/package.json'));
+  return join(pkgRoot, 'dist', 'cli.mjs');
+}
+
 async function main(): Promise<void> {
   await ensureLicense();
-  const tsxPath = resolve(process.cwd(), 'node_modules', '.bin', 'tsx');
-  const child = spawn(tsxPath, ['watch', '--exclude', './data/**', '--exclude', './temp/**', 'src/server/index.ts'], {
+  const tsxCli = resolveTsxCli();
+  const child = spawn(process.execPath, [tsxCli, 'watch', '--exclude', './data/**', '--exclude', './temp/**', 'src/server/index.ts'], {
     stdio: 'inherit',
     cwd: process.cwd(),
+    windowsHide: true,
   });
   child.on('error', (err) => {
     console.error('[dev-wrapper] Failed to start:', err.message);

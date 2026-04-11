@@ -2,6 +2,43 @@ https://github.com/len5ky/cursorremote
 
 
 
+thêm 1 launcher với tính năng tạo session và quản lý session cursor làm việc,
+pnpm run launcher khởi chạy sẽ show 1 form các phiên cursor đang mở,
+và thêm mới 1 session mới với debug port khác,
+tên phiên làm việc mới đặt theo Mnemonic Phrase ngắn dễ đọc, hoặc english dict,
+phiên làm việc nằm trong thư mục ./data/[name]/.
+mở cursor với debug port free và workking folder là ./data/[name]/,
+lưu pid và port và .lock file trong thư mục làm việc,
+tìm các phiên làm việc trước bằng cách quét thư mục con ./data lấy lock file lấy pid và port,
+scan pid còn chạy không và port còn mở localhost:[port]/json không?
+nếu không thì xóa lock file và thư mục đó đang không có session làm việc [hiển thị session inactive],
+nếu có thì hiện thị session active
+(ghi chú nếu pid và port 1 trong 2 cái mở mà cái kia tắt thì session
+invalid và cần kill pid hoặc tìm cursor tương ứng với port đang mở để kill).
+khi click vào 1 session thì nếu inactive thì call server index lên với tham số là folder và port,
+chỉnh sửa lại code index để nhận tham số không fix cứng,
+server index có thể close (close luôn cursor và pid) và có thể chạy lại bằng kết nối vào port cũ
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 "Hãy phân tích toàn bộ repository này từ 3 góc độ:

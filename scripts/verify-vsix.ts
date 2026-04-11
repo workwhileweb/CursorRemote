@@ -1,6 +1,6 @@
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 
 const DEV_ROOT = resolve(process.cwd());
 const PKG_PATH = resolve(DEV_ROOT, 'package.json');
@@ -27,6 +27,33 @@ const FORBIDDEN_PATTERNS = [
   '.cursor/',
 ];
 
+/** bsdtar on Windows rejects backslash paths ("Cannot connect to E: resolve failed"). */
+function tarPath(p: string): string {
+  return process.platform === 'win32' ? p.replace(/\\/g, '/') : p;
+}
+
+function listVsixFiles(vsixPath: string): string {
+  const p = tarPath(vsixPath);
+  try {
+    return execFileSync('tar', ['-tf', p], { encoding: 'utf-8' });
+  } catch {
+    console.error(`✗ Could not list ${vsixPath}. Was it built? (needs tar in PATH)`);
+    process.exit(1);
+  }
+}
+
+function readInnerPackageJson(vsixPath: string): { version?: string } {
+  const p = tarPath(vsixPath);
+  try {
+    const raw = execFileSync('tar', ['-xOf', p, 'extension/package.json'], {
+      encoding: 'utf-8',
+    });
+    return JSON.parse(raw) as { version?: string };
+  } catch {
+    return {};
+  }
+}
+
 function main(): void {
   const vsixArg = process.argv[2];
   let vsixPath: string;
@@ -40,20 +67,12 @@ function main(): void {
 
   console.log(`Verifying ${vsixPath}\n`);
 
-  let listing: string;
-  try {
-    listing = execSync(`python3 -c "
-import zipfile, sys
-with zipfile.ZipFile(sys.argv[1]) as z:
-    for n in z.namelist():
-        print(n)
-" ${JSON.stringify(vsixPath)}`, { encoding: 'utf-8' });
-  } catch {
-    console.error(`✗ Could not read ${vsixPath}. Was it built?`);
-    process.exit(1);
-  }
-
-  const files = listing.trim().split('\n');
+  const listing = listVsixFiles(vsixPath);
+  const files = listing
+    .trim()
+    .split(/\r?\n/)
+    .map(line => line.replace(/\r$/, ''))
+    .filter(Boolean);
   let errors = 0;
 
   console.log('— Required files —');
@@ -90,12 +109,8 @@ with zipfile.ZipFile(sys.argv[1]) as z:
   const pkg = JSON.parse(readFileSync(PKG_PATH, 'utf-8'));
   const innerPkgFile = files.find(f => f === 'extension/package.json');
   if (innerPkgFile) {
-    const innerPkg = execSync(`python3 -c "
-import zipfile, sys, json
-with zipfile.ZipFile(sys.argv[1]) as z:
-    data = json.loads(z.read('extension/package.json'))
-    print(data.get('version', ''))
-" ${JSON.stringify(vsixPath)}`, { encoding: 'utf-8' }).trim();
+    const inner = readInnerPackageJson(vsixPath);
+    const innerPkg = inner.version ?? '';
     if (innerPkg === pkg.version) {
       console.log(`\n✓ Version match: ${pkg.version}`);
     } else {

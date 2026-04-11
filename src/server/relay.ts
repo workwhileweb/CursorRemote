@@ -1,6 +1,6 @@
 import express from 'express';
 import { createServer } from 'http';
-import { Server as SocketServer, type Socket } from 'socket.io';
+import { Server as SocketServer, type Namespace, type Socket } from 'socket.io';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { randomBytes, timingSafeEqual } from 'crypto';
@@ -16,6 +16,14 @@ import {
   parseSessionCookie,
   type WebappSessionStore,
 } from './webapp-sessions.js';
+import { killProcessTree } from './process-kill.js';
+import {
+  clearCursorPidInSessionLock,
+  hasCursorPidInSessionLock,
+  readSessionLock,
+} from './session-lock-file.js';
+import { getLauncherPageHtml } from './launcher/html.js';
+import { mountLauncherApi } from './launcher/routes.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -24,6 +32,22 @@ interface RateLimitEntry {
   count: number;
   resetAt: number;
 }
+
+export type RelayMountParent = {
+  app: express.Application;
+  httpServer: ReturnType<typeof createServer>;
+  io: SocketServer;
+};
+
+export type RelayOptions = {
+  enableLauncherApi?: boolean;
+  /** When set, HTTP/socket servers are shared; routes mount under `mountPath`. */
+  parent?: RelayMountParent;
+  /** No trailing slash, e.g. `/s/calm-ocean` */
+  mountPath?: string;
+  /** Socket.IO namespace, e.g. `/relay-calm-ocean` */
+  socketNamespace?: string;
+};
 
 const LOGIN_PAGE_HTML = `<!DOCTYPE html>
 <html lang="en">
@@ -92,7 +116,7 @@ const LOGIN_PAGE_HTML = `<!DOCTYPE html>
         const data = await res.json();
         if (res.ok && data.token) {
           localStorage.setItem('cursor-remote-token', data.token);
-          window.location.href = '/';
+          window.location.href = '/app';
         } else {
           err.textContent = data.error || 'Invalid password';
           err.style.display = 'block';
@@ -111,7 +135,12 @@ export class Relay {
   private config: ServerConfig;
   private app: express.Application;
   private httpServer: ReturnType<typeof createServer>;
-  private io: SocketServer;
+  private ioServer: SocketServer;
+  private nsp: Namespace;
+  /** Routes for this relay instance (web UI + /health scoped to mount path when using launcher or embedded). */
+  private routeTarget: express.Router;
+  private readonly ownsHttpStack: boolean;
+  private relayStopped = false;
   private stateManager: StateManager;
   private commandExecutor: CommandExecutor;
   private cdpBridge: CDPBridge;
@@ -126,28 +155,61 @@ export class Relay {
     return this.config.webappPassword.length > 0;
   }
 
+  private readonly enableLauncherApi: boolean;
+
   constructor(
     config: ServerConfig,
     stateManager: StateManager,
     commandExecutor: CommandExecutor,
-    cdpBridge: CDPBridge
+    cdpBridge: CDPBridge,
+    options?: RelayOptions
   ) {
     this.config = config;
     this.stateManager = stateManager;
     this.commandExecutor = commandExecutor;
     this.cdpBridge = cdpBridge;
+    this.enableLauncherApi = options?.enableLauncherApi !== false;
     this.sessionStore = createWebappSessionStore(config.dataDir);
 
-    this.app = express();
-    this.httpServer = createServer(this.app);
-    this.io = new SocketServer(this.httpServer, {
-      serveClient: false,
-      cors: {
-        origin: true,
-        methods: ['GET', 'POST'],
-        credentials: true,
-      },
-    });
+    const parent = options?.parent;
+    this.ownsHttpStack = !parent;
+
+    if (parent) {
+      const mountPath = options!.mountPath!;
+      const socketNs = options!.socketNamespace!;
+      this.app = parent.app;
+      this.httpServer = parent.httpServer;
+      this.ioServer = parent.io;
+      this.nsp = parent.io.of(socketNs);
+      this.routeTarget = express.Router();
+      parent.app.use(mountPath, this.routeTarget);
+      this.routeTarget.use((_req, res, next) => {
+        if (this.relayStopped) {
+          return res.status(503).json({ error: 'Session relay stopped' });
+        }
+        next();
+      });
+    } else {
+      this.app = express();
+      this.httpServer = createServer(this.app);
+      this.ioServer = new SocketServer(this.httpServer, {
+        serveClient: false,
+        cors: {
+          origin: true,
+          methods: ['GET', 'POST'],
+          credentials: true,
+        },
+      });
+      if (this.enableLauncherApi) {
+        this.nsp = this.ioServer.of('/main');
+        this.routeTarget = express.Router();
+        this.app.use('/app', this.routeTarget);
+      } else {
+        this.nsp = this.ioServer.of('/');
+        this.routeTarget = express.Router();
+        this.app.use(this.routeTarget);
+      }
+    }
 
     this.setupRoutes();
     this.setupSocketHandlers();
@@ -158,11 +220,47 @@ export class Relay {
     }
   }
 
+  getApp(): express.Application {
+    return this.app;
+  }
+
+  getHttpServer(): ReturnType<typeof createServer> {
+    return this.httpServer;
+  }
+
+  getIo(): SocketServer {
+    return this.ioServer;
+  }
+
+  private serveIndexHtml(res: express.Response, clientDir: string): void {
+    const cacheBust = Date.now().toString(36);
+    const htmlPath = join(clientDir, 'index.html');
+    try {
+      let html = readFileSync(htmlPath, 'utf-8');
+      if (!/<base\s/i.test(html)) {
+        html = html.replace('<head>', '<head>\n  <base href="/">');
+      }
+      /* Cache-bust bundled JS/CSS (paths may be root-absolute e.g. /app.js). */
+      html = html.replace(/(src|href)="(\/?)([^"]+)\.(js|css)"/g, (_m, attr, slash, base, ext) => {
+        const path = slash ? `${slash}${base}.${ext}` : `${base}.${ext}`;
+        return `${attr}="${path}?v=${cacheBust}"`;
+      });
+      res.setHeader('Cache-Control', 'no-store');
+      res.type('html').send(html);
+    } catch (err) {
+      console.error(`[relay] Failed to serve index.html: ${err}`);
+      res.status(500).send('Client files not found');
+    }
+  }
+
   /**
    * Binds starting at `config.serverPort`; if that port is in use, tries +1, +2, … (max 100 attempts).
    * Updates `config.serverPort` to the bound port so health and logs match.
    */
   start(): Promise<void> {
+    if (!this.ownsHttpStack) {
+      return Promise.resolve();
+    }
     const host = this.config.serverHost;
     const basePort = this.config.serverPort;
     const maxAttempts = 100;
@@ -201,7 +299,16 @@ export class Relay {
   }
 
   async stop(): Promise<void> {
-    this.io.close();
+    if (!this.ownsHttpStack) {
+      this.relayStopped = true;
+      try {
+        this.nsp.disconnectSockets(true);
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+    this.ioServer.close();
     return new Promise((resolve) => {
       this.httpServer.close(() => resolve());
     });
@@ -260,54 +367,84 @@ export class Relay {
 
   private setupRoutes(): void {
     const clientDir = join(__dirname, '..', 'client');
+    const r = this.routeTarget;
 
-    this.app.use(express.json());
+    if (this.ownsHttpStack) {
+      this.app.use(express.json());
 
-    this.app.get('/login', (_req, res) => {
-      if (!this.authEnabled) return res.redirect('/');
-      res.type('html').send(LOGIN_PAGE_HTML);
-    });
+      this.app.get('/login', (_req, res) => {
+        if (!this.authEnabled) return res.redirect(this.enableLauncherApi ? '/app' : '/');
+        let loginHtml = LOGIN_PAGE_HTML;
+        if (!this.enableLauncherApi) {
+          loginHtml = loginHtml.replace(
+            "window.location.href = '/app'",
+            "window.location.href = '/'"
+          );
+        }
+        res.type('html').send(loginHtml);
+      });
 
-    this.app.post('/api/login', (req, res) => {
-      if (!this.authEnabled) return res.json({ token: 'no-auth' });
+      this.app.post('/api/login', (req, res) => {
+        if (!this.authEnabled) return res.json({ token: 'no-auth' });
 
-      const ip = this.getClientIp(req);
-      const { allowed, retryAfter } = this.checkRateLimit(ip);
-      if (!allowed) {
-        console.warn(`[relay] Rate limited login from ${ip}`);
-        res.set('Retry-After', String(retryAfter));
-        return res.status(429).json({ error: `Too many attempts. Retry in ${retryAfter}s.` });
+        const ip = this.getClientIp(req);
+        const { allowed, retryAfter } = this.checkRateLimit(ip);
+        if (!allowed) {
+          console.warn(`[relay] Rate limited login from ${ip}`);
+          res.set('Retry-After', String(retryAfter));
+          return res.status(429).json({ error: `Too many attempts. Retry in ${retryAfter}s.` });
+        }
+
+        const password = req.body?.password;
+        if (typeof password !== 'string' || password.length === 0) {
+          return res.status(400).json({ error: 'Password required' });
+        }
+
+        const expected = Buffer.from(this.config.webappPassword);
+        const received = Buffer.from(password);
+        if (expected.length !== received.length || !timingSafeEqual(expected, received)) {
+          console.warn(`[relay] Failed login attempt from ${ip}`);
+          return res.status(401).json({ error: 'Invalid password' });
+        }
+
+        const token = randomBytes(32).toString('hex');
+        this.sessionStore.add(token);
+        console.log(`[relay] Successful login from ${ip}`);
+        res.setHeader(
+          'Set-Cookie',
+          [
+            `${WEBAPP_SESSION_COOKIE}=${token}`,
+            'HttpOnly',
+            'Path=/',
+            'SameSite=Lax',
+            `Max-Age=${Relay.SESSION_COOKIE_MAX_AGE_SEC}`,
+          ].join('; ')
+        );
+        return res.json({ token });
+      });
+
+      if (this.enableLauncherApi) {
+        this.app.get('/', (_req, res) => {
+          res.type('html').send(getLauncherPageHtml());
+        });
+        this.app.get('/launcher', (_req, res) => {
+          res.type('html').send(getLauncherPageHtml());
+        });
+        mountLauncherApi(this.app);
       }
 
-      const password = req.body?.password;
-      if (typeof password !== 'string' || password.length === 0) {
-        return res.status(400).json({ error: 'Password required' });
-      }
-
-      const expected = Buffer.from(this.config.webappPassword);
-      const received = Buffer.from(password);
-      if (expected.length !== received.length || !timingSafeEqual(expected, received)) {
-        console.warn(`[relay] Failed login attempt from ${ip}`);
-        return res.status(401).json({ error: 'Invalid password' });
-      }
-
-      const token = randomBytes(32).toString('hex');
-      this.sessionStore.add(token);
-      console.log(`[relay] Successful login from ${ip}`);
-      res.setHeader(
-        'Set-Cookie',
-        [
-          `${WEBAPP_SESSION_COOKIE}=${token}`,
-          'HttpOnly',
-          'Path=/',
-          'SameSite=Lax',
-          `Max-Age=${Relay.SESSION_COOKIE_MAX_AGE_SEC}`,
-        ].join('; ')
+      this.app.use(
+        express.static(clientDir, {
+          etag: true,
+          lastModified: true,
+          setHeaders: (res) => {
+            res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+          },
+        })
       );
-      return res.json({ token });
-    });
+    }
 
-    this.app.get('/health', (req, res) => {
+    r.get('/health', (req, res) => {
       const state = this.stateManager.getCurrentState();
       const sessionOk = !this.authEnabled || this.resolveHttpSession(req) !== undefined;
       res.json({
@@ -320,7 +457,7 @@ export class Relay {
         consecutiveExtractionFailures: state.consecutiveExtractionFailures,
         lastExtractionError: state.lastExtractionError,
         agentStatus: state.agentStatus,
-        clients: this.io.engine.clientsCount,
+        clients: this.nsp.sockets.size,
         uptime: process.uptime(),
         windows: state.windows,
         activeWindowId: state.activeWindowId,
@@ -329,30 +466,14 @@ export class Relay {
         chatTabCount: state.chatTabs?.length ?? 0,
         pendingApprovalCount: state.pendingApprovals?.length ?? 0,
         generation: this.stateManager.generation,
+        /** True when `dataDir/session.lock` lists a Cursor PID (launcher workflow). */
+        stopCursorAvailable: hasCursorPidInSessionLock(this.config.dataDir),
       });
     });
 
-    const cacheBust = Date.now().toString(36);
-    this.app.get('/', (_req, res) => {
-      const htmlPath = join(clientDir, 'index.html');
-      try {
-        let html = readFileSync(htmlPath, 'utf-8');
-        html = html.replace(/(src|href)="([^"]+)\.(js|css)"/g, `$1="$2.$3?v=${cacheBust}"`);
-        res.setHeader('Cache-Control', 'no-store');
-        res.type('html').send(html);
-      } catch (err) {
-        console.error(`[relay] Failed to serve index.html: ${err}`);
-        res.status(500).send('Client files not found');
-      }
+    r.get('/', (_req, res) => {
+      this.serveIndexHtml(res, clientDir);
     });
-
-    this.app.use(express.static(clientDir, {
-      etag: true,
-      lastModified: true,
-      setHeaders: (res) => {
-        res.setHeader('Cache-Control', 'no-cache, must-revalidate');
-      },
-    }));
 
     const authMiddleware: express.RequestHandler = (req, res, next) => {
       if (!this.authEnabled) return next();
@@ -365,12 +486,27 @@ export class Relay {
       return res.redirect('/login');
     };
 
-    this.app.use(authMiddleware);
+    r.use(authMiddleware);
+
+    r.post('/api/stop-cursor', (_req, res) => {
+      const lock = readSessionLock(this.config.dataDir);
+      const pid = lock?.cursorPid;
+      if (typeof pid !== 'number' || pid <= 0) {
+        return res.status(400).json({
+          error:
+            'No Cursor PID in session.lock. Use the session launcher to spawn Cursor, or set session.lock in DATA_DIR.',
+        });
+      }
+      console.warn(`[relay] Quit Cursor requested — killing PID ${pid}`);
+      killProcessTree(pid);
+      clearCursorPidInSessionLock(this.config.dataDir);
+      res.json({ ok: true, pid });
+    });
   }
 
   private setupSocketHandlers(): void {
     if (this.authEnabled) {
-      this.io.use((socket, next) => {
+      this.nsp.use((socket, next) => {
         const resolved = this.resolveSocketSession(socket);
         if (resolved) return next();
         const raw = socket.handshake.auth?.token;
@@ -390,7 +526,7 @@ export class Relay {
       });
     }
 
-    this.io.on('connection', (socket) => {
+    this.nsp.on('connection', (socket) => {
       console.log(`[relay] Client connected: ${socket.id}`);
 
       socket.emit('state:full', this.stateManager.getCurrentState());
@@ -651,11 +787,11 @@ export class Relay {
 
   private setupStateForwarding(): void {
     this.stateManager.on('state:patch', (patch: Partial<CursorState>) => {
-      this.io.emit('state:patch', patch);
+      this.nsp.emit('state:patch', patch);
     });
 
     this.stateManager.on('connection:changed', (connected: boolean) => {
-      this.io.emit('connection:status', { connected });
+      this.nsp.emit('connection:status', { connected });
     });
   }
 }

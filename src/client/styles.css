@@ -86,6 +86,120 @@ header {
   color: var(--text-secondary);
 }
 
+.header-quit-btn {
+  margin-left: 8px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--accent-red);
+  background: transparent;
+  border: 1px solid rgba(227, 70, 113, 0.45);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.header-quit-btn:hover {
+  background: rgba(227, 70, 113, 0.12);
+}
+
+.header-quit-btn.hidden {
+  display: none;
+}
+
+.header-sessions-btn {
+  margin-left: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--accent-blue);
+  background: transparent;
+  border: 1px solid rgba(55, 148, 255, 0.45);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.header-sessions-btn:hover {
+  background: rgba(55, 148, 255, 0.12);
+}
+
+/* --- Launcher modal (embedded /launcher) --- */
+.launcher-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.launcher-modal-overlay.hidden {
+  display: none;
+}
+
+.launcher-modal {
+  width: 100%;
+  max-width: min(960px, 100vw - 32px);
+  height: min(85vh, 820px);
+  max-height: min(90vh, 900px);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+}
+
+.launcher-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.launcher-modal-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.launcher-modal-close {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+}
+
+.launcher-modal-close:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.launcher-modal-hint {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  padding: 8px 16px 0;
+  margin: 0;
+}
+
+.launcher-iframe {
+  width: 100%;
+  flex: 1;
+  min-height: min(420px, 50vh);
+  border: none;
+  background: #181818;
+}
+
 .header-right.header-right-hidden {
   display: none;
 }

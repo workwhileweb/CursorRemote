@@ -2,6 +2,38 @@ https://github.com/len5ky/cursorremote
 
 
 
+
+
+
+start relay đã mở đúng curssor với thư mục chỉ định, tuy nhiên port gắn cho cursor không work : http://localhost:9222/json error, trên relay status waiting for cursor, có thể là do cursor không thể create new instance với debug port, khi có instance cũ đang chạy, nếu vậy thì multi debug port cũng không hoạt động. hãy thử tìm cách cô lập tiến tình (change env ...) hoặc create new hardlink of cursor folder để change path, hãy tự test xem có work không. btw: khi click start relay trong launcher, nếu đã có relay hoạt động thì phải open lại relay đó 
+
+
+
+
+
+
+
+
+
+
+
+
+
+new session chỉ tạo mới 1 folder trong data và call start relay với tham số là thư mục đó,
+start relay kiểm tra thư mục đó và :
+-nếu có file lock cũ thì check port và pid còn tồn tại không, nếu còn tồn tại thì kill cursor gắn với port đó (hoặc kill processid)
+-check free port mới và launch new cursor với debug port mới
+-cập nhật pid và port mới vào lock
+-show ui relay
+
+gom laucher về giao diện relay và chayj trong @src/server/index.ts  luôn, thêm 1 button trong relay show modal dialog show launcher và switch relay, nếu chạy lần đầu thì show launcher luôn
+sẽ không còn pnpm run launcher nữa chỉ còn pnpm run dev
+
+
+lỗi : khi mở http://127.0.0.1:3000/  show launcher, bấm start relay hiện thị text : Relay: http://127.0.0.1:3001
+vào url http://127.0.0.1:3001/ thì thấy Cannot GET /launcher. cursor vẫn chưa mở, và toàn bộ ui nên nằm chung 1 port, không mở thêm port, bấm start relay thì chuyển qua giao diện ui của relay đó ngay, ở trong giao diện ui của relay có button show launcher modal dialog để switch qua relay khác hoặc new relay
+
+
 thêm 1 launcher với tính năng tạo session và quản lý session cursor làm việc,
 pnpm run launcher khởi chạy sẽ show 1 form các phiên cursor đang mở,
 và thêm mới 1 session mới với debug port khác,

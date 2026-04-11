@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="theme-color" content="#1a1a2e">
   <title>CursorRemote</title>
-  <link rel="icon" type="image/png" href="favicon.png">
-  <link rel="apple-touch-icon" href="favicon.png">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="apple-touch-icon" href="/favicon.png">
+  <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <div id="app">
@@ -15,6 +15,8 @@
       <div class="header-left">
         <span id="connection-dot" class="dot reconnecting"></span>
         <span id="connection-text">Connecting...</span>
+        <button type="button" id="btn-sessions" class="header-sessions-btn" title="Sessions &amp; child relays">Sessions</button>
+        <button type="button" id="btn-quit-cursor" class="header-quit-btn hidden" title="Quit Cursor IDE (session launcher)">Quit Cursor</button>
       </div>
       <div class="header-right">
         <span id="agent-status-icon"></span>
@@ -124,7 +126,18 @@
 
   <div id="toast-container"></div>
 
-  <script src="vendor-socket.io.min.js"></script>
-  <script src="app.js"></script>
+  <div id="launcher-modal-overlay" class="launcher-modal-overlay hidden" aria-hidden="true">
+    <div class="launcher-modal" role="dialog" aria-modal="true" aria-labelledby="launcher-modal-title">
+      <div class="launcher-modal-header">
+        <h2 id="launcher-modal-title" class="launcher-modal-title">Sessions</h2>
+        <button type="button" id="btn-launcher-close" class="launcher-modal-close" aria-label="Close">×</button>
+      </div>
+      <p class="launcher-modal-hint">Spawn Cursor workspaces, start a session relay, or switch to another session — all on this port.</p>
+      <iframe id="launcher-iframe" class="launcher-iframe" title="Session manager" src="about:blank"></iframe>
+    </div>
+  </div>
+
+  <script src="/vendor-socket.io.min.js"></script>
+  <script src="/app.js"></script>
 </body>
 </html>

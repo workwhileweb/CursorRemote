@@ -1,3 +1,4 @@
+import './cli-env.js';
 import { createWriteStream, appendFileSync, readFileSync } from 'fs';
 import { checkLicense } from './license.js';
 import { loadConfig, loadSelectors } from './config.js';
@@ -7,6 +8,10 @@ import { CommandExecutor } from './command-executor.js';
 import { StateManager } from './state-manager.js';
 import { WindowMonitor } from './window-monitor.js';
 import { Relay } from './relay.js';
+import {
+  registerEmbeddedRelayParentConfig,
+  stopAllEmbeddedRelaySessions,
+} from './embedded-relay.js';
 import type { Transport } from './transports/types.js';
 import { TelegramTransport } from './transports/telegram/index.js';
 import { RawTelegramTransport } from './transports/telegram-raw/index.js';
@@ -118,9 +123,17 @@ async function main(): Promise<void> {
 
   const transports: Transport[] = [];
 
-  const relay = new Relay(config, stateManager, commandExecutor, cdpBridge);
+  const relay = new Relay(config, stateManager, commandExecutor, cdpBridge, {
+    enableLauncherApi: true,
+  });
+  registerEmbeddedRelayParentConfig(config, () => ({
+    app: relay.getApp(),
+    httpServer: relay.getHttpServer(),
+    io: relay.getIo(),
+  }));
   await relay.start();
-  console.log(`[main] Server: http://${config.serverHost}:${config.serverPort}`);
+  console.log(`[main] Launcher: http://${config.serverHost}:${config.serverPort}/`);
+  console.log(`[main] Web app (this Cursor): http://${config.serverHost}:${config.serverPort}/app`);
 
   console.log('[main] Connecting to Cursor IDE...');
   await cdpBridge.connect();
@@ -156,6 +169,7 @@ async function main(): Promise<void> {
 
   const shutdown = async () => {
     console.log('\n[main] Shutting down...');
+    await stopAllEmbeddedRelaySessions();
     windowMonitor.stop();
     extractor.stop();
     for (const transport of transports) {

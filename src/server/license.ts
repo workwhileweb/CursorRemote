@@ -52,6 +52,18 @@ function readStoredKey(): string | null {
   return null;
 }
 
+/** Validate `license.key` inside a given directory (embedded session relays). */
+export function isLicenseValidForDataDir(dataDirAbs: string): boolean {
+  const p = join(dataDirAbs, 'license.key');
+  try {
+    if (!existsSync(p)) return false;
+    const raw = readFileSync(p, 'utf-8').trim();
+    return raw.length > 0 && validateKey(raw);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Validates the stored license key. No prompting - use scripts/dev-wrapper.ts
  * for interactive dev (prompts before starting tsx watch).

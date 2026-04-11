@@ -26,6 +26,25 @@
     questionnaire: null,
   };
 
+  const RELAY_BASE = (function () {
+    const p = window.location.pathname;
+    const m = p.match(/^(\/s\/[^/]+)/);
+    if (m) return m[1];
+    if (p === '/app' || p.startsWith('/app/')) return '/app';
+    return '';
+  })();
+  function apiUrl(sub) {
+    if (sub.charAt(0) !== '/') sub = '/' + sub;
+    return RELAY_BASE + sub;
+  }
+  const SOCKET_NS = (function () {
+    const p = window.location.pathname;
+    const m = p.match(/^\/s\/([^/]+)/);
+    if (m) return '/relay-' + decodeURIComponent(m[1]);
+    if (p === '/app' || p.startsWith('/app/')) return '/main';
+    return '/';
+  })();
+
   function getAuthToken() {
     return localStorage.getItem(AUTH_TOKEN_KEY) || '';
   }
@@ -64,7 +83,7 @@
 
   async function checkAuth() {
     try {
-      const res = await fetch('/health', {
+      const res = await fetch(apiUrl('/health'), {
         credentials: 'same-origin',
         headers: getAuthHeaders(),
       });
@@ -124,6 +143,7 @@
   const $emptyHint = document.getElementById('empty-state-hint');
   const $connDot = document.getElementById('connection-dot');
   const $connText = document.getElementById('connection-text');
+  const $btnQuitCursor = document.getElementById('btn-quit-cursor');
   const $statusIcon = document.getElementById('agent-status-icon');
   const $statusText = document.getElementById('agent-status-text');
   const $headerRight = document.querySelector('#header .header-right');
@@ -164,8 +184,12 @@
   const $planModalTitle = document.getElementById('plan-modal-title');
   const $planModalBody = document.getElementById('plan-modal-body');
   const $planModalClose = document.getElementById('plan-modal-close');
+  const $btnSessions = document.getElementById('btn-sessions');
+  const $launcherOverlay = document.getElementById('launcher-modal-overlay');
+  const $launcherIframe = document.getElementById('launcher-iframe');
+  const $btnLauncherClose = document.getElementById('btn-launcher-close');
 
-  const socket = io({
+  const socket = io(SOCKET_NS === '/' ? undefined : SOCKET_NS, {
     reconnection: true,
     reconnectionDelay: 1000,
     reconnectionDelayMax: 10000,
@@ -196,7 +220,46 @@
     });
   }
 
-  socket.on('connect', () => renderAll());
+  async function refreshQuitCursorButton() {
+    if (!$btnQuitCursor) return;
+    try {
+      const res = await fetch(apiUrl('/health'), { credentials: 'same-origin', headers: getAuthHeaders() });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.stopCursorAvailable) {
+        $btnQuitCursor.classList.remove('hidden');
+      } else {
+        $btnQuitCursor.classList.add('hidden');
+      }
+    } catch { /* ignore */ }
+  }
+
+  if ($btnQuitCursor) {
+    $btnQuitCursor.addEventListener('click', async () => {
+      if (!confirm('Quit Cursor IDE? Unsaved work may be lost.')) return;
+      try {
+        const res = await fetch(apiUrl('/api/stop-cursor'), {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          showToast(data.error || 'Could not quit Cursor', 'error');
+          return;
+        }
+        showToast('Cursor quit', 'success');
+        refreshQuitCursorButton();
+      } catch (e) {
+        showToast(String(e), 'error');
+      }
+    });
+  }
+
+  socket.on('connect', () => {
+    renderAll();
+    refreshQuitCursorButton();
+  });
   socket.on('disconnect', () => renderAll());
 
   let connectFailCount = 0;
@@ -359,11 +422,15 @@
     }
 
     if (!state.connected) {
+      const sessionPath = window.location.pathname.match(/^\/s\/[^/]+/);
+      const sessionHint = sessionPath
+        ? 'This session needs its own Cursor window from the launcher (<strong>New session</strong>). If you closed it, open that workspace again or create a new session.'
+        : 'Make sure Cursor is running with<br><code>--remote-debugging-port=9222</code> (or the port you configured).';
       return {
         status: 'reconnecting',
         label: 'Waiting for Cursor',
         emptyPrimary: 'Connecting to Cursor IDE...',
-        emptyHint: 'Make sure Cursor is running with<br><code>--remote-debugging-port=9222</code>',
+        emptyHint: sessionHint,
       };
     }
 
@@ -1891,6 +1958,56 @@
       setTimeout(() => toast.remove(), 300);
     }, 3000);
   }
+
+  function openLauncherModal() {
+    if (!$launcherOverlay || !$launcherIframe) return;
+    $launcherOverlay.classList.remove('hidden');
+    $launcherOverlay.setAttribute('aria-hidden', 'false');
+    $launcherIframe.src = '/launcher?t=' + Date.now();
+  }
+
+  function closeLauncherModal() {
+    if (!$launcherOverlay) return;
+    $launcherOverlay.classList.add('hidden');
+    $launcherOverlay.setAttribute('aria-hidden', 'true');
+    if ($launcherIframe) $launcherIframe.src = 'about:blank';
+  }
+
+  function maybeAutoOpenLauncher() {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('openLauncher') === '1') {
+        openLauncherModal();
+        params.delete('openLauncher');
+        const q = params.toString();
+        window.history.replaceState({}, '', window.location.pathname + (q ? '?' + q : '') + window.location.hash);
+        return;
+      }
+      if (!localStorage.getItem('cursor-remote-launcher-first-visit-done')) {
+        openLauncherModal();
+        localStorage.setItem('cursor-remote-launcher-first-visit-done', '1');
+      }
+    } catch { /* ignore */ }
+  }
+
+  if ($btnSessions) {
+    $btnSessions.addEventListener('click', () => openLauncherModal());
+  }
+  if ($btnLauncherClose) {
+    $btnLauncherClose.addEventListener('click', () => closeLauncherModal());
+  }
+  if ($launcherOverlay) {
+    $launcherOverlay.addEventListener('click', (e) => {
+      if (e.target === $launcherOverlay) closeLauncherModal();
+    });
+  }
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && $launcherOverlay && !$launcherOverlay.classList.contains('hidden')) {
+      closeLauncherModal();
+    }
+  });
+
+  maybeAutoOpenLauncher();
 
   } // end bootstrap
 

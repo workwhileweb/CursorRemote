@@ -471,9 +471,57 @@ export class Relay {
       });
     });
 
-    r.get('/', (_req, res) => {
-      this.serveIndexHtml(res, clientDir);
+    this.app.get('/debug/state', (req, res) => {
+      if (this.authEnabled && this.resolveHttpSession(req) === undefined) {
+        res.status(401).json({ error: 'unauthorized' });
+        return;
+      }
+      const state = this.stateManager.getCurrentState();
+      res.json({
+        activeWindowId: state.activeWindowId,
+        agentStatus: state.agentStatus,
+        agentActivityText: state.agentActivityText,
+        agentActivityLive: state.agentActivityLive,
+        pendingApprovals: state.pendingApprovals,
+        chatTabs: state.chatTabs.map((t) => ({
+          isActive: t.isActive,
+          title: t.title,
+          composerId: t.composerId.substring(0, 16),
+        })),
+        windows: state.windows.map((w) => ({ id: w.id.substring(0, 8), title: w.title })),
+        messageCount: state.messages.length,
+        lastMessages: state.messages.slice(-3).map((m) => ({
+          type: m.type,
+          flatIndex: m.flatIndex,
+          ...(m.type === 'tool' || m.type === 'run_command' ? {
+            actions: 'actions' in m ? m.actions?.length ?? 0 : 0,
+          } : {}),
+        })),
+        generation: this.stateManager.generation,
+      });
     });
+
+    const cacheBust = Date.now().toString(36);
+    this.app.get('/', (_req, res) => {
+      const htmlPath = join(clientDir, 'index.html');
+      try {
+        let html = readFileSync(htmlPath, 'utf-8');
+        html = html.replace(/(src|href)="([^"]+)\.(js|css)"/g, `$1="$2.$3?v=${cacheBust}"`);
+        res.setHeader('Cache-Control', 'no-store');
+        res.type('html').send(html);
+      } catch (err) {
+        console.error(`[relay] Failed to serve index.html: ${err}`);
+        res.status(500).send('Client files not found');
+      }
+    });
+
+    this.app.use(express.static(clientDir, {
+      etag: true,
+      lastModified: true,
+      setHeaders: (res) => {
+        res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+      },
+    }));
 
     const authMiddleware: express.RequestHandler = (req, res, next) => {
       if (!this.authEnabled) return next();

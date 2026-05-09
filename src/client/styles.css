@@ -1403,6 +1403,9 @@ header {
   border-top: 1px solid var(--border-color);
   flex-shrink: 0;
   z-index: 10;
+  display: flex;
+  flex-direction: column;
+  max-height: 55vh;
 }
 
 .questionnaire-bar.hidden { display: none; }
@@ -1412,6 +1415,7 @@ header {
   align-items: center;
   gap: 6px;
   margin-bottom: 10px;
+  flex-shrink: 0;
 }
 
 .questionnaire-icon { font-size: 14px; }
@@ -1426,6 +1430,14 @@ header {
   font-size: 11px;
   color: var(--text-secondary);
   margin-left: auto;
+}
+
+#questionnaire-questions {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  min-height: 0;
+  flex: 1;
 }
 
 .questionnaire-question {
@@ -1493,6 +1505,7 @@ header {
   display: flex;
   gap: 10px;
   margin-top: 6px;
+  flex-shrink: 0;
 }
 
 .btn-q-skip {

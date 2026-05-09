@@ -241,7 +241,8 @@
     "test": "npx tsx --test tests/*.test.ts",
     "probe": "tsx scripts/probe-cdp.ts",
     "wait-record": "tsx scripts/wait-record.ts",
-    "launcher": "tsx scripts/launcher/index.ts"
+    "launcher": "tsx scripts/launcher/index.ts",
+    "probe:cursor-isolation": "tsx scripts/probe-cursor-isolation.ts"
   },
   "dependencies": {
     "@grammyjs/auto-retry": "^2.0.2",

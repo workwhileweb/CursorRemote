@@ -4,15 +4,18 @@ import { join } from 'path';
 import express, { type Application, type Request } from 'express';
 import { randomSessionSlug } from './wordlist.js';
 import { findFreeTcpPort } from './ports.js';
+import { buildCursorLaunchArgs } from './cursor-spawn.js';
 import { resolveCursorExecutable } from './cursor-exe.js';
 import {
   cleanupStaleLock,
+  cdpJsonResponds,
   isPidAlive,
   listSessionNames,
   readLock,
   removeLock,
   scanSession,
   sessionDir,
+  waitForCdpJson,
   writeLock,
   type WorkspaceSessionLock,
 } from './workspace-lock.js';
@@ -22,12 +25,23 @@ import { killProcessTree } from '../process-kill.js';
 const NAME_RE = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
 
 type SessionRelayResult =
-  | { ok: true; path: string; url: string }
+  | { ok: true; path: string; url: string; already?: boolean }
   | { ok: false; status: number; error: string };
+
+function relayOpenUrls(req: Pick<Request, 'protocol' | 'get'>, name: string): {
+  path: string;
+  url: string;
+} {
+  const host = req.get('host') || '127.0.0.1';
+  const base = `${req.protocol}://${host}`;
+  const path = `/s/${name}/`;
+  return { path, url: `${base}${path.replace(/\/$/, '')}/` };
+}
 
 /**
  * Ensure session dir exists, tear down old embedded relay + Cursor from lock,
  * spawn Cursor on a fresh CDP port, start embedded relay, update lock.
+ * If relay is already running and CDP responds, returns immediately (open-only).
  */
 async function runSessionRelay(
   cwd: string,
@@ -45,6 +59,12 @@ async function runSessionRelay(
 
   const prevLock = readLock(cwd, name);
   if (prevLock?.relayEmbedded === true && isEmbeddedRelayRunning(name)) {
+    if (await cdpJsonResponds(prevLock.cdpPort)) {
+      const { path, url } = relayOpenUrls(req, name);
+      console.log(`[launcher] Session "${name}" relay already up — opening UI only`);
+      return { ok: true, path, url, already: true };
+    }
+    console.warn(`[launcher] Session "${name}" embedded relay up but CDP dead — restarting`);
     await stopEmbeddedRelaySession(name);
   }
 
@@ -80,10 +100,12 @@ async function runSessionRelay(
     return { ok: false, status: 500, error: String(e) };
   }
 
-  const child = spawn(exe, [`--remote-debugging-port=${cdpPort}`, dataDirAbs], {
+  const launchArgs = buildCursorLaunchArgs(dataDirAbs, cdpPort);
+  const child = spawn(exe, launchArgs, {
     detached: true,
     stdio: 'ignore',
     windowsHide: false,
+    env: { ...process.env },
   });
   child.unref();
   const cursorPid = child.pid ?? null;
@@ -103,11 +125,30 @@ async function runSessionRelay(
   try {
     appendFileSync(
       join(dataDirAbs, 'relay.log'),
-      `\n=== session relay ${new Date().toISOString()} cdp=${cdpPort} pid=${cursorPid ?? 'none'} ===\n`,
+      `\n=== session relay ${new Date().toISOString()} cdp=${cdpPort} pid=${cursorPid ?? 'none'} args=${JSON.stringify(launchArgs)} ===\n`,
       'utf-8'
     );
   } catch {
     /* ignore */
+  }
+
+  const cdpReady = await waitForCdpJson(cdpPort);
+  if (!cdpReady) {
+    const msg = `CDP did not respond on port ${cdpPort} within timeout (try closing other Cursor windows or check firewall).`;
+    console.error(`[launcher] ${msg}`);
+    if (cursorPid != null && cursorPid > 0) {
+      try {
+        killProcessTree(cursorPid);
+      } catch {
+        /* ignore */
+      }
+    }
+    try {
+      removeLock(cwd, name);
+    } catch {
+      /* ignore */
+    }
+    return { ok: false, status: 500, error: msg };
   }
 
   try {
@@ -136,13 +177,11 @@ async function runSessionRelay(
   next.relayPort = null;
   writeLock(cwd, next);
 
-  const host = req.get('host') || '127.0.0.1';
-  const base = `${req.protocol}://${host}`;
-  const path = `/s/${name}/`;
+  const { path, url } = relayOpenUrls(req, name);
   return {
     ok: true,
     path,
-    url: `${base}${path.replace(/\/$/, '')}/`,
+    url,
   };
 }
 
@@ -228,6 +267,7 @@ export function mountLauncherApi(app: Application): void {
       ok: true,
       path: result.path,
       url: result.url,
+      already: result.already === true,
       cdpPort: lock?.cdpPort,
       pid: lock?.cursorPid,
     });
@@ -246,6 +286,7 @@ export function mountLauncherApi(app: Application): void {
       ok: true,
       path: result.path,
       url: result.url,
+      already: result.already === true,
       relayPid: null,
       embedded: true,
     });

@@ -1,7 +1,17 @@
 https://github.com/len5ky/cursorremote
 
 
+hiện đã có cursor agents work remote, ứng dụng này vô dụng
+nhưng có thể dùng kỹ thuật này để làm việc ứng dụng khác
 
+
+-thêm public link bằng clloudflare và QR code là 2fa được lưu, show link public và qr
+
+
+# inject vào cursor yếu lắm vì không capture hết được
+và không tức thời
+tốt nhất là chạy remote bằng máy tính bảng còn hơn
+khi xài phone chỉ nên chat
 
 
 
@@ -9,8 +19,11 @@ start relay đã mở đúng curssor với thư mục chỉ định, tuy nhiên 
 
 
 
+Thêm --user-data-dir riêng mỗi session (cách VS Code/Electron tách instance) và chờ CDP sẵn sàng trước khi bật relay. Nếu relay đã chạy và CDP phản hồi, chỉ trả về URL (mở lại) thay vì khởi động lại.
+mọi thứ có vẻ đã chạy, tuy nhiên vì user-data-dir mới nên cursor trống và chưa đăng nhập, thay vì tạo mới folder user-data-dir hãy create 1 junction hardlink qua user-data-dir cũ global của cursor xem thế nào
 
 
+Lưu ý: Hai tiến trình Cursor cùng lúc trên cùng nội dung user-data vẫn có thể gặp lock / single-instance của Electron; nếu gặp, thử chỉ mở một instance hoặc bật CURSOR_REMOTE_PROFILE_ISOLATED=1 cho session đó.
 
 
 

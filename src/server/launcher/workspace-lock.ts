@@ -96,6 +96,20 @@ export async function cdpJsonResponds(port: number, timeoutMs = 1500): Promise<b
   }
 }
 
+/** Poll until CDP /json responds or timeout (use after spawning Cursor). */
+export async function waitForCdpJson(
+  port: number,
+  timeoutMs = 45_000,
+  intervalMs = 400
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await cdpJsonResponds(port, 1200)) return true;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return false;
+}
+
 export type SessionHealth = 'active' | 'inactive' | 'invalid';
 
 export interface SessionScanRow {
